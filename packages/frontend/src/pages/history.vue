@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { deleteHistory, getHistory } from '@/api';
+import PageHeader from '@/components/PageHeader.vue';
 import { Button } from '@/components/ui/button';
 import { handleError } from '@/utils/error';
 import { useQuery } from '@tanstack/vue-query';
 import dayjs from 'dayjs';
-import { ChevronLeft, Trash2 } from 'lucide-vue-next';
+import { Trash2 } from 'lucide-vue-next';
 import { computed, onActivated } from 'vue';
-import { RouterLink, useRouter } from 'vue-router';
-
-const router = useRouter();
+import { RouterLink } from 'vue-router';
 
 const { data, refetch } = useQuery({
   queryKey: [getHistory.name],
@@ -31,9 +30,7 @@ onActivated(refetch);
 
 <template>
   <div class="flex h-full w-full flex-col gap-4 px-6 py-14 lg:px-12 lg:py-16">
-    <Button class="fixed left-2 top-2" variant="outline" size="icon" @click="router.go(-1)">
-      <ChevronLeft />
-    </Button>
+    <PageHeader title="历史记录" />
 
     <RouterLink
       v-for="item in items"

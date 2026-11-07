@@ -1,20 +1,23 @@
-const EndpointPrefix = '/api';
+const ApiBaseUrl = String(import.meta.env.VITE_API_BASE_URL ?? '')
+  .trim()
+  .replace(/\/+$/, '');
+const EndpointPrefix = `${ApiBaseUrl}/api`;
 
-export enum Endpoints {
-  SearchComic = `${EndpointPrefix}/search_comic`,
-  GetComic = `${EndpointPrefix}/get_comic`,
-  GetChapter = `${EndpointPrefix}/get_chapter`,
-  ProxyImage = `${EndpointPrefix}/proxy_image`,
-  CheckPassword = `${EndpointPrefix}/check_password`,
-  GetHistory = `${EndpointPrefix}/get_history`,
-  UpsertHistory = `${EndpointPrefix}/upsert_history`,
-  DeleteHistory = `${EndpointPrefix}/delete_history`,
-  GetLibrary = `${EndpointPrefix}/get_library`,
-  AddToLibrary = `${EndpointPrefix}/add_to_library`,
-  RemoveFromLibrary = `${EndpointPrefix}/remove_from_library`,
-  CheckInLibrary = `${EndpointPrefix}/check_in_library`,
-  GetComicHistory = `${EndpointPrefix}/get_comic_history`,
-}
+export const Endpoints = {
+  SearchComic: `${EndpointPrefix}/search_comic`,
+  GetComic: `${EndpointPrefix}/get_comic`,
+  GetChapter: `${EndpointPrefix}/get_chapter`,
+  ProxyImage: `${EndpointPrefix}/proxy_image`,
+  CheckPassword: `${EndpointPrefix}/check_password`,
+  GetHistory: `${EndpointPrefix}/get_history`,
+  UpsertHistory: `${EndpointPrefix}/upsert_history`,
+  DeleteHistory: `${EndpointPrefix}/delete_history`,
+  GetLibrary: `${EndpointPrefix}/get_library`,
+  AddToLibrary: `${EndpointPrefix}/add_to_library`,
+  RemoveFromLibrary: `${EndpointPrefix}/remove_from_library`,
+  CheckInLibrary: `${EndpointPrefix}/check_in_library`,
+  GetComicHistory: `${EndpointPrefix}/get_comic_history`,
+} as const;
 
 export interface ComicBrief {
   id: string;

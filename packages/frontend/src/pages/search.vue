@@ -3,7 +3,7 @@ import { searchComic } from '@/api';
 import { Input } from '@/components/ui/input';
 import { useQuery } from '@tanstack/vue-query';
 import { useDebounce } from '@vueuse/core';
-import { History, LibraryBig, LoaderCircle } from 'lucide-vue-next';
+import { Download, History, LibraryBig, LoaderCircle } from 'lucide-vue-next';
 import { computed, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 
@@ -46,6 +46,10 @@ const comics = computed(() => data.value || []);
 
       <RouterLink class="p-2" to="/history">
         <History />
+      </RouterLink>
+
+      <RouterLink class="p-2" to="/downloads" aria-label="下载管理">
+        <Download />
       </RouterLink>
     </div>
   </div>

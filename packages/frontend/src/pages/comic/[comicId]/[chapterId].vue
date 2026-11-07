@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { getChapter, proxyImage, upsertHistory } from '@/api';
+import { getChapter, upsertHistory } from '@/api';
 import ChapterGestureMask from '@/components/ChapterGestureMask.vue';
 import LazyImage from '@/components/LazyImage.vue';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Slider } from '@/components/ui/slider';
 import { useActivated } from '@/hooks/activated';
 import { usePreviousRoute } from '@/hooks/previous-route';
+import { getChapterForReader } from '@/services/download';
 import { LocalStorageKey, ReadDirection } from '@/types/const';
 import { resetThemeColor, setThemeColor } from '@/utils/theme-color';
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
@@ -58,7 +59,7 @@ const chapterId = computed(() => route.params.chapterId);
 
 const { data, isFetching } = useQuery({
   queryKey: [getChapter.name, comicId, chapterId],
-  queryFn: () => getChapter({ comicId: comicId.value, chapterId: chapterId.value }),
+  queryFn: () => getChapterForReader(comicId.value, chapterId.value),
   staleTime: Infinity,
   gcTime: Infinity,
 });
@@ -221,16 +222,16 @@ const toEndDistance = computed(() => {
 });
 watch(toEndDistance, () => {
   if (toEndDistance.value < 5 && data.value) {
+    const nextChapterId = data.value.nextId;
     queryClient.prefetchQuery({
-      queryKey: [getChapter.name, comicId.value, data.value.nextId],
+      queryKey: [getChapter.name, comicId.value, nextChapterId],
       queryFn: async () => {
-        const nextChapter = await getChapter({
-          comicId: comicId.value,
-          chapterId: data.value.nextId,
-        });
+        const nextChapter = await getChapterForReader(comicId.value, nextChapterId);
 
         nextChapter.images.slice(0, 5).forEach((image) => {
-          fetch(proxyImage(image), { priority: 'low' });
+          if (!image.startsWith('blob:')) {
+            fetch(image, { priority: 'low' });
+          }
         });
 
         return nextChapter;
@@ -297,7 +298,7 @@ useEventListener(window, 'beforeunload', update);
         class="w-dvw flex-none snap-start bg-black object-contain"
         :class="[isPWA ? 'h-[calc(100dvh_-_env(safe-area-inset-bottom))]' : 'h-dvh']"
         styles="content-visibility:auto"
-        :src="proxyImage(item.image)"
+        :src="item.image"
         :index="item.index"
         :active-index="activeIndex[0]"
         @activated="
