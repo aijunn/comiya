@@ -7,6 +7,7 @@ import { Slider } from '@/components/ui/slider';
 import { useActivated } from '@/hooks/activated';
 import { usePreviousRoute } from '@/hooks/previous-route';
 import { LocalStorageKey, ReadDirection } from '@/types/const';
+import { resetThemeColor, setThemeColor } from '@/utils/theme-color';
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import { onKeyStroke, useDebounceFn, useEventListener, useLocalStorage, useMediaQuery } from '@vueuse/core';
 import {
@@ -37,11 +38,11 @@ import { useRoute, useRouter } from 'vue-router';
 const isPWA = useMediaQuery('(display-mode: fullscreen), (display-mode: standalone)');
 
 onActivated(() => {
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#000');
+  setThemeColor('#000');
 });
 
 onDeactivated(() => {
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#fff');
+  resetThemeColor();
 });
 
 const activated = useActivated();
