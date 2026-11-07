@@ -7,6 +7,7 @@ export const Endpoints = {
   SearchComic: `${EndpointPrefix}/search_comic`,
   GetComic: `${EndpointPrefix}/get_comic`,
   GetChapter: `${EndpointPrefix}/get_chapter`,
+  GetSources: `${EndpointPrefix}/get_sources`,
   ProxyImage: `${EndpointPrefix}/proxy_image`,
   CheckPassword: `${EndpointPrefix}/check_password`,
   GetHistory: `${EndpointPrefix}/get_history`,
@@ -19,7 +20,13 @@ export const Endpoints = {
   GetComicHistory: `${EndpointPrefix}/get_comic_history`,
 } as const;
 
+export interface SourceInfo {
+  id: string;
+  name: string;
+}
+
 export interface ComicBrief {
+  source: string;
   id: string;
   name: string;
   cover: string;
@@ -34,6 +41,7 @@ export interface Comic extends ComicBrief {
 }
 
 export interface ComicChapterBrief {
+  source: string;
   id: string;
   comicId: string;
   name: string;
@@ -51,19 +59,24 @@ export interface ComicChapterGroup {
   chapters: ComicChapterBrief[];
 }
 
+export type GetSourcesResp = SourceInfo[];
+
 export type SearchComicReq = {
   keyword: string;
+  source?: string;
 };
 
 export type SearchComicResp = ComicBrief[];
 
 export type GetComicReq = {
+  source: string;
   id: string;
 };
 
 export type GetComicResp = Comic;
 
 export type GetChapterReq = {
+  source: string;
   comicId: string;
   chapterId: string;
 };
@@ -79,6 +92,7 @@ export type CheckPasswordResp = {
 };
 
 export type HistoryItem = {
+  source: string;
   comicId: string;
   chapterId: string;
   comicName: string;
@@ -92,6 +106,7 @@ export type HistoryItem = {
 export type GetHistoryResp = HistoryItem[];
 
 export type UpsertHistoryReq = {
+  source: string;
   comicId: string;
   chapterId: string;
   comicName: string;
@@ -101,20 +116,24 @@ export type UpsertHistoryReq = {
 };
 
 export type DeleteHistoryReq = {
+  source: string;
   comicId: string;
 };
 
 export type AddToLibraryReq = {
+  source: string;
   id: string;
   name: string;
   cover: string;
 };
 
 export type RemoveFromLibraryReq = {
+  source: string;
   id: string;
 };
 
 export type LibComic = {
+  source: string;
   id: string;
   name: string;
   cover: string;
@@ -125,6 +144,7 @@ export type LibComic = {
 export type GetLibraryResp = LibComic[];
 
 export type CheckInLibraryReq = {
+  source: string;
   id: string;
 };
 
@@ -133,6 +153,7 @@ export type CheckInLibraryResp = {
 };
 
 export type GetComicHistoryReq = {
+  source: string;
   id: string;
 };
 

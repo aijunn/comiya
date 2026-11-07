@@ -1,6 +1,6 @@
 import type { Comic } from '@/api/types';
 
-/** 存储在 IndexedDB `comics` store 中的漫画记录 */
+/** 存储在 IndexedDB `comic_records` store 中的漫画记录 */
 export interface DownloadComicRecord extends Comic {
   coverBlob?: ArrayBuffer;
   coverType?: string;
@@ -16,8 +16,9 @@ export interface DownloadedComic extends Comic {
   updatedAt: number;
 }
 
-/** 存储在 IndexedDB `chapters` store 中的章节记录 */
+/** 存储在 IndexedDB `chapter_records` store 中的章节记录 */
 export interface DownloadChapterRecord {
+  source: string;
   comicId: string;
   chapterId: string;
   name: string;
@@ -29,8 +30,9 @@ export interface DownloadChapterRecord {
   createdAt: number;
 }
 
-/** 存储在 IndexedDB `pages` store 中的单页图片记录 */
+/** 存储在 IndexedDB `page_records` store 中的单页图片记录 */
 export interface DownloadPageRecord {
+  source: string;
   comicId: string;
   chapterId: string;
   page: number;
@@ -41,6 +43,7 @@ export interface DownloadPageRecord {
 /** 一次下载任务（一个漫画的一批章节） */
 export interface DownloadBatch {
   id: string;
+  source: string;
   comicId: string;
   comicName: string;
   total: number;

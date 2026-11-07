@@ -1,39 +1,107 @@
 import { getChapter, proxyImage } from '@/api';
 import type { Comic, ComicChapter, ComicChapterBrief } from '@/api/types';
 import type { DownloadChapterRecord, DownloadComicRecord, DownloadPageRecord } from '@/types/download';
+import { comicKey } from '@/utils';
 
 const DB_NAME = 'comiya-downloads';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
-const COMIC_STORE = 'comics';
-const CHAPTER_STORE = 'chapters';
-const PAGE_STORE = 'pages';
+const COMIC_STORE = 'comic_records';
+const CHAPTER_STORE = 'chapter_records';
+const PAGE_STORE = 'page_records';
+
+// Stores used before multi-source support. Their rows are migrated to
+// `comic_records` / `chapter_records` / `page_records` on the v1 -> v2 upgrade.
+const LEGACY_COMIC_STORE = 'comics';
+const LEGACY_CHAPTER_STORE = 'chapters';
+const LEGACY_PAGE_STORE = 'pages';
+const LEGACY_SOURCE_ID = 'manhuagui';
 
 const PAGE_CONCURRENCY = 4;
 
 let databasePromise: Promise<IDBDatabase> | null = null;
+
+function createStores(database: IDBDatabase) {
+  if (!database.objectStoreNames.contains(COMIC_STORE)) {
+    database.createObjectStore(COMIC_STORE, { keyPath: ['source', 'id'] });
+  }
+
+  if (!database.objectStoreNames.contains(CHAPTER_STORE)) {
+    const store = database.createObjectStore(CHAPTER_STORE, { keyPath: ['source', 'comicId', 'chapterId'] });
+    store.createIndex('byComic', ['source', 'comicId']);
+  }
+
+  if (!database.objectStoreNames.contains(PAGE_STORE)) {
+    const store = database.createObjectStore(PAGE_STORE, {
+      keyPath: ['source', 'comicId', 'chapterId', 'page'],
+    });
+    store.createIndex('byComic', ['source', 'comicId']);
+    store.createIndex('byChapter', ['source', 'comicId', 'chapterId']);
+  }
+}
+
+/**
+ * Copy v1 records into the new source-scoped stores. Cursors keep memory usage
+ * bounded even when the user has downloaded a lot of pages; the versionchange
+ * transaction aborts atomically if anything fails.
+ */
+function migrateLegacyStores(database: IDBDatabase, transaction: IDBTransaction) {
+  const pairs: [string, string][] = [
+    [LEGACY_COMIC_STORE, COMIC_STORE],
+    [LEGACY_CHAPTER_STORE, CHAPTER_STORE],
+    [LEGACY_PAGE_STORE, PAGE_STORE],
+  ].filter(([legacyStore]) => database.objectStoreNames.contains(legacyStore)) as [string, string][];
+
+  if (!pairs.length) {
+    return;
+  }
+
+  let pending = pairs.length;
+
+  const finish = () => {
+    pending -= 1;
+    if (pending > 0) {
+      return;
+    }
+
+    for (const [legacyStore] of pairs) {
+      database.deleteObjectStore(legacyStore);
+    }
+  };
+
+  for (const [legacyStore, targetStore] of pairs) {
+    const cursorRequest = transaction.objectStore(legacyStore).openCursor();
+    const target = transaction.objectStore(targetStore);
+
+    cursorRequest.onsuccess = () => {
+      const cursor = cursorRequest.result;
+      if (!cursor) {
+        finish();
+        return;
+      }
+
+      target.put({ ...(cursor.value as Record<string, unknown>), source: LEGACY_SOURCE_ID });
+      cursor.continue();
+    };
+  }
+}
 
 function openDatabase(): Promise<IDBDatabase> {
   if (!databasePromise) {
     databasePromise = new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-      request.onupgradeneeded = () => {
+      request.onupgradeneeded = (event) => {
         const database = request.result;
-
-        if (!database.objectStoreNames.contains(COMIC_STORE)) {
-          database.createObjectStore(COMIC_STORE, { keyPath: 'id' });
+        const transaction = request.transaction;
+        if (!transaction) {
+          return;
         }
 
-        if (!database.objectStoreNames.contains(CHAPTER_STORE)) {
-          const store = database.createObjectStore(CHAPTER_STORE, { keyPath: ['comicId', 'chapterId'] });
-          store.createIndex('byComic', 'comicId');
-        }
+        createStores(database);
 
-        if (!database.objectStoreNames.contains(PAGE_STORE)) {
-          const store = database.createObjectStore(PAGE_STORE, { keyPath: ['comicId', 'chapterId', 'page'] });
-          store.createIndex('byComic', 'comicId');
-          store.createIndex('byChapter', ['comicId', 'chapterId']);
+        if (event.oldVersion > 0 && event.oldVersion < 2) {
+          migrateLegacyStores(database, transaction);
         }
       };
 
@@ -84,8 +152,8 @@ function deleteByIndex(index: IDBIndex, range: IDBKeyRange): void {
 const coverUrlCache = new Map<string, string>();
 const chapterUrlCache = new Map<string, string[]>();
 
-function chapterKey(comicId: string, chapterId: string) {
-  return `${comicId}::${chapterId}`;
+function chapterKey(source: string, comicId: string, chapterId: string) {
+  return `${comicKey(source, comicId)}::${chapterId}`;
 }
 
 export function getComicCoverUrl(record: DownloadComicRecord): string {
@@ -93,35 +161,37 @@ export function getComicCoverUrl(record: DownloadComicRecord): string {
     return record.cover;
   }
 
-  const cached = coverUrlCache.get(record.id);
+  const key = comicKey(record.source, record.id);
+  const cached = coverUrlCache.get(key);
   if (cached) {
     return cached;
   }
 
   const url = URL.createObjectURL(new Blob([record.coverBlob], { type: record.coverType || 'image/jpeg' }));
-  coverUrlCache.set(record.id, url);
+  coverUrlCache.set(key, url);
   return url;
 }
 
-export function releaseComicObjectUrls(comicId: string): void {
-  const coverUrl = coverUrlCache.get(comicId);
+export function releaseComicObjectUrls(source: string, comicId: string): void {
+  const key = comicKey(source, comicId);
+  const coverUrl = coverUrlCache.get(key);
   if (coverUrl) {
     URL.revokeObjectURL(coverUrl);
-    coverUrlCache.delete(comicId);
+    coverUrlCache.delete(key);
   }
 
-  const prefix = `${comicId}::`;
-  for (const [key, urls] of chapterUrlCache) {
-    if (!key.startsWith(prefix)) {
+  const prefix = `${key}::`;
+  for (const [cachedKey, urls] of chapterUrlCache) {
+    if (!cachedKey.startsWith(prefix)) {
       continue;
     }
     urls.forEach((url) => URL.revokeObjectURL(url));
-    chapterUrlCache.delete(key);
+    chapterUrlCache.delete(cachedKey);
   }
 }
 
-export function releaseChapterObjectUrls(comicId: string, chapterId: string): void {
-  const key = chapterKey(comicId, chapterId);
+export function releaseChapterObjectUrls(source: string, comicId: string, chapterId: string): void {
+  const key = chapterKey(source, comicId, chapterId);
   const urls = chapterUrlCache.get(key);
   if (!urls) {
     return;
@@ -137,48 +207,54 @@ export async function listComicRecords(): Promise<DownloadComicRecord[]> {
   return records;
 }
 
-export async function getComicRecord(comicId: string): Promise<DownloadComicRecord | undefined> {
+export async function getComicRecord(source: string, comicId: string): Promise<DownloadComicRecord | undefined> {
   const database = await openDatabase();
   const transaction = database.transaction(COMIC_STORE, 'readonly');
   const record: DownloadComicRecord | undefined = await requestToPromise(
-    transaction.objectStore(COMIC_STORE).get(comicId),
+    transaction.objectStore(COMIC_STORE).get([source, comicId]),
   );
   return record;
 }
 
-export async function listChapterRecords(comicId: string): Promise<DownloadChapterRecord[]> {
+export async function listChapterRecords(source: string, comicId: string): Promise<DownloadChapterRecord[]> {
   const database = await openDatabase();
   const transaction = database.transaction(CHAPTER_STORE, 'readonly');
   const index = transaction.objectStore(CHAPTER_STORE).index('byComic');
-  const records: DownloadChapterRecord[] = await requestToPromise(index.getAll(IDBKeyRange.only(comicId)));
+  const records: DownloadChapterRecord[] = await requestToPromise(index.getAll(IDBKeyRange.only([source, comicId])));
   return records.sort((a, b) => a.createdAt - b.createdAt);
 }
 
-export async function getChapterRecord(comicId: string, chapterId: string): Promise<DownloadChapterRecord | undefined> {
+export async function getChapterRecord(
+  source: string,
+  comicId: string,
+  chapterId: string,
+): Promise<DownloadChapterRecord | undefined> {
   const database = await openDatabase();
   const transaction = database.transaction(CHAPTER_STORE, 'readonly');
   const record: DownloadChapterRecord | undefined = await requestToPromise(
-    transaction.objectStore(CHAPTER_STORE).get([comicId, chapterId]),
+    transaction.objectStore(CHAPTER_STORE).get([source, comicId, chapterId]),
   );
   return record;
 }
 
-async function getPageRecords(comicId: string, chapterId: string): Promise<DownloadPageRecord[]> {
+async function getPageRecords(source: string, comicId: string, chapterId: string): Promise<DownloadPageRecord[]> {
   const database = await openDatabase();
   const transaction = database.transaction(PAGE_STORE, 'readonly');
   const index = transaction.objectStore(PAGE_STORE).index('byChapter');
-  const records: DownloadPageRecord[] = await requestToPromise(index.getAll(IDBKeyRange.only([comicId, chapterId])));
+  const records: DownloadPageRecord[] = await requestToPromise(
+    index.getAll(IDBKeyRange.only([source, comicId, chapterId])),
+  );
   return records.sort((a, b) => a.page - b.page);
 }
 
-async function getChapterPageKeys(comicId: string, chapterId: string): Promise<Set<number>> {
+async function getChapterPageKeys(source: string, comicId: string, chapterId: string): Promise<Set<number>> {
   const database = await openDatabase();
   const transaction = database.transaction(PAGE_STORE, 'readonly');
   const index = transaction.objectStore(PAGE_STORE).index('byChapter');
   const pages = new Set<number>();
 
   await new Promise<void>((resolve, reject) => {
-    const request = index.openKeyCursor(IDBKeyRange.only([comicId, chapterId]));
+    const request = index.openKeyCursor(IDBKeyRange.only([source, comicId, chapterId]));
     request.onerror = () => reject(request.error ?? new Error('读取下载进度失败'));
     request.onsuccess = () => {
       const cursor = request.result;
@@ -186,7 +262,7 @@ async function getChapterPageKeys(comicId: string, chapterId: string): Promise<S
         resolve();
         return;
       }
-      const [, , page] = cursor.primaryKey as [string, string, number];
+      const [, , , page] = cursor.primaryKey as [string, string, string, number];
       pages.add(page);
       cursor.continue();
     };
@@ -195,14 +271,14 @@ async function getChapterPageKeys(comicId: string, chapterId: string): Promise<S
   return pages;
 }
 
-async function getChapterPageSummary(comicId: string, chapterId: string): Promise<Map<number, number>> {
+async function getChapterPageSummary(source: string, comicId: string, chapterId: string): Promise<Map<number, number>> {
   const database = await openDatabase();
   const transaction = database.transaction(PAGE_STORE, 'readonly');
   const index = transaction.objectStore(PAGE_STORE).index('byChapter');
   const sizes = new Map<number, number>();
 
   await new Promise<void>((resolve, reject) => {
-    const request = index.openCursor(IDBKeyRange.only([comicId, chapterId]));
+    const request = index.openCursor(IDBKeyRange.only([source, comicId, chapterId]));
     request.onerror = () => reject(request.error ?? new Error('读取页面数据失败'));
     request.onsuccess = () => {
       const cursor = request.result;
@@ -226,21 +302,21 @@ async function putPageRecord(record: DownloadPageRecord): Promise<void> {
   await transactionToPromise(transaction);
 }
 
-export async function countChapterPages(comicId: string, chapterId: string): Promise<number> {
+export async function countChapterPages(source: string, comicId: string, chapterId: string): Promise<number> {
   const database = await openDatabase();
   const transaction = database.transaction(PAGE_STORE, 'readonly');
   const index = transaction.objectStore(PAGE_STORE).index('byChapter');
-  return requestToPromise(index.count(IDBKeyRange.only([comicId, chapterId])));
+  return requestToPromise(index.count(IDBKeyRange.only([source, comicId, chapterId])));
 }
 
-export async function listChapterPageCounts(comicId: string): Promise<Record<string, number>> {
+export async function listChapterPageCounts(source: string, comicId: string): Promise<Record<string, number>> {
   const database = await openDatabase();
   const transaction = database.transaction(PAGE_STORE, 'readonly');
   const index = transaction.objectStore(PAGE_STORE).index('byComic');
   const counts: Record<string, number> = {};
 
   await new Promise<void>((resolve, reject) => {
-    const request = index.openKeyCursor(IDBKeyRange.only(comicId));
+    const request = index.openKeyCursor(IDBKeyRange.only([source, comicId]));
     request.onerror = () => reject(request.error ?? new Error('读取下载进度失败'));
     request.onsuccess = () => {
       const cursor = request.result;
@@ -248,7 +324,7 @@ export async function listChapterPageCounts(comicId: string): Promise<Record<str
         resolve();
         return;
       }
-      const [, chapterId] = cursor.primaryKey as [string, string, number];
+      const [, , chapterId] = cursor.primaryKey as [string, string, string, number];
       counts[chapterId] = (counts[chapterId] ?? 0) + 1;
       cursor.continue();
     };
@@ -274,9 +350,9 @@ async function fetchImage(url: string): Promise<FetchedImage> {
   };
 }
 
-async function fetchCover(url: string): Promise<FetchedImage | null> {
+async function fetchCover(source: string, url: string): Promise<FetchedImage | null> {
   try {
-    return await fetchImage(proxyImage(url));
+    return await fetchImage(proxyImage(source, url));
   } catch {
     return null;
   }
@@ -287,6 +363,7 @@ async function fetchCover(url: string): Promise<FetchedImage | null> {
  */
 function snapshotComic(comic: Comic): Comic {
   return {
+    source: comic.source,
     id: comic.id,
     name: comic.name,
     cover: comic.cover,
@@ -297,6 +374,7 @@ function snapshotComic(comic: Comic): Comic {
     chapterGroups: comic.chapterGroups.map((group) => ({
       name: group.name,
       chapters: group.chapters.map((chapter) => ({
+        source: chapter.source,
         id: chapter.id,
         comicId: chapter.comicId,
         name: chapter.name,
@@ -314,14 +392,18 @@ export async function downloadChapter(
   chapter: ComicChapterBrief,
   onPageProgress?: (done: number, total: number) => void,
 ): Promise<DownloadChapterRecord> {
-  const chapterData = await getChapter({ comicId: comic.id, chapterId: chapter.id });
+  const chapterData = await getChapter({
+    source: comic.source,
+    comicId: comic.id,
+    chapterId: chapter.id,
+  });
   const total = chapterData.images.length;
 
   if (total === 0) {
     throw new Error('该章节没有可下载的图片');
   }
 
-  const existingPages = await getChapterPageKeys(comic.id, chapter.id);
+  const existingPages = await getChapterPageKeys(comic.source, comic.id, chapter.id);
   let done = 0;
   for (let page = 0; page < total; page += 1) {
     if (existingPages.has(page)) {
@@ -345,7 +427,7 @@ export async function downloadChapter(
         const database = await openDatabase();
         const transaction = database.transaction(COMIC_STORE, 'readwrite');
         const store = transaction.objectStore(COMIC_STORE);
-        const request = store.get(comic.id);
+        const request = store.get([comic.source, comic.id]);
         const now = Date.now();
 
         request.onsuccess = () => {
@@ -366,7 +448,7 @@ export async function downloadChapter(
   }
 
   if (missingPages.length > 0) {
-    const urls = chapterData.images.map((image) => proxyImage(image));
+    const urls = chapterData.images.map((image) => proxyImage(comic.source, image));
     let next = 0;
 
     async function worker() {
@@ -376,6 +458,7 @@ export async function downloadChapter(
 
         const image = await fetchImage(urls[page]);
         await putPageRecord({
+          source: comic.source,
           comicId: comic.id,
           chapterId: chapter.id,
           page,
@@ -398,7 +481,7 @@ export async function downloadChapter(
     }
   }
 
-  const pageSizes = await getChapterPageSummary(comic.id, chapter.id);
+  const pageSizes = await getChapterPageSummary(comic.source, comic.id, chapter.id);
   for (let page = 0; page < total; page += 1) {
     if (!pageSizes.has(page)) {
       throw new Error('页面下载不完整，请重试');
@@ -409,20 +492,20 @@ export async function downloadChapter(
 
   const comicSnapshot = snapshotComic(comic);
   const now = Date.now();
-  const existingComic = await getComicRecord(comic.id);
+  const existingComic = await getComicRecord(comic.source, comic.id);
   let comicRecord: DownloadComicRecord;
 
   if (existingComic) {
     comicRecord = { ...existingComic, ...comicSnapshot, updatedAt: now };
     if (!comicRecord.coverBlob) {
-      const cover = await fetchCover(comicSnapshot.cover);
+      const cover = await fetchCover(comic.source, comicSnapshot.cover);
       if (cover) {
         comicRecord.coverBlob = cover.data;
         comicRecord.coverType = cover.type;
       }
     }
   } else {
-    const cover = await fetchCover(comicSnapshot.cover);
+    const cover = await fetchCover(comic.source, comicSnapshot.cover);
     comicRecord = {
       ...comicSnapshot,
       coverBlob: cover?.data,
@@ -433,6 +516,7 @@ export async function downloadChapter(
   }
 
   const chapterRecord: DownloadChapterRecord = {
+    source: comic.source,
     comicId: comic.id,
     chapterId: chapter.id,
     name: chapterData.name || chapter.name,
@@ -452,7 +536,7 @@ export async function downloadChapter(
 
   for (const page of pageSizes.keys()) {
     if (page >= total) {
-      pageStore.delete([comic.id, chapter.id, page]);
+      pageStore.delete([comic.source, comic.id, chapter.id, page]);
     }
   }
 
@@ -465,17 +549,21 @@ export async function downloadChapter(
 }
 
 /** 读取本地已下载章节；未下载或数据不完整时返回 null */
-export async function readDownloadedChapter(comicId: string, chapterId: string): Promise<ComicChapter | null> {
-  const record = await getChapterRecord(comicId, chapterId);
+export async function readDownloadedChapter(
+  source: string,
+  comicId: string,
+  chapterId: string,
+): Promise<ComicChapter | null> {
+  const record = await getChapterRecord(source, comicId, chapterId);
   if (!record) {
     return null;
   }
 
-  const key = chapterKey(comicId, chapterId);
+  const key = chapterKey(source, comicId, chapterId);
   let urls = chapterUrlCache.get(key);
 
   if (!urls) {
-    const pages = await getPageRecords(comicId, chapterId);
+    const pages = await getPageRecords(source, comicId, chapterId);
     if (pages.length < record.pageCount) {
       return null;
     }
@@ -487,6 +575,7 @@ export async function readDownloadedChapter(comicId: string, chapterId: string):
   }
 
   return {
+    source: record.source,
     id: record.chapterId,
     comicId: record.comicId,
     name: record.name,
@@ -501,9 +590,9 @@ export async function readDownloadedChapter(comicId: string, chapterId: string):
  * 阅读器使用的章节数据：优先本地下载，未下载时回退到远端接口。
  * 返回的 images 已经是可直接用于 <img> 的地址（代理地址或 object URL）。
  */
-export async function getChapterForReader(comicId: string, chapterId: string): Promise<ComicChapter> {
+export async function getChapterForReader(source: string, comicId: string, chapterId: string): Promise<ComicChapter> {
   try {
-    const local = await readDownloadedChapter(comicId, chapterId);
+    const local = await readDownloadedChapter(source, comicId, chapterId);
     if (local) {
       return local;
     }
@@ -511,31 +600,31 @@ export async function getChapterForReader(comicId: string, chapterId: string): P
     console.error('[download] 读取本地章节失败', error);
   }
 
-  const remote = await getChapter({ comicId, chapterId });
-  return { ...remote, images: remote.images.map((image) => proxyImage(image)) };
+  const remote = await getChapter({ source, comicId, chapterId });
+  return { ...remote, images: remote.images.map((image) => proxyImage(source, image)) };
 }
 
-export async function deleteComicRecord(comicId: string): Promise<void> {
+export async function deleteComicRecord(source: string, comicId: string): Promise<void> {
   const database = await openDatabase();
   const transaction = database.transaction([COMIC_STORE, CHAPTER_STORE, PAGE_STORE], 'readwrite');
 
-  deleteByIndex(transaction.objectStore(PAGE_STORE).index('byComic'), IDBKeyRange.only(comicId));
-  deleteByIndex(transaction.objectStore(CHAPTER_STORE).index('byComic'), IDBKeyRange.only(comicId));
-  transaction.objectStore(COMIC_STORE).delete(comicId);
+  deleteByIndex(transaction.objectStore(PAGE_STORE).index('byComic'), IDBKeyRange.only([source, comicId]));
+  deleteByIndex(transaction.objectStore(CHAPTER_STORE).index('byComic'), IDBKeyRange.only([source, comicId]));
+  transaction.objectStore(COMIC_STORE).delete([source, comicId]);
 
   await transactionToPromise(transaction);
-  releaseComicObjectUrls(comicId);
+  releaseComicObjectUrls(source, comicId);
 }
 
-export async function deleteChapterRecord(comicId: string, chapterId: string): Promise<void> {
+export async function deleteChapterRecord(source: string, comicId: string, chapterId: string): Promise<void> {
   const database = await openDatabase();
   const transaction = database.transaction([CHAPTER_STORE, PAGE_STORE], 'readwrite');
 
-  deleteByIndex(transaction.objectStore(PAGE_STORE).index('byChapter'), IDBKeyRange.only([comicId, chapterId]));
-  transaction.objectStore(CHAPTER_STORE).delete([comicId, chapterId]);
+  deleteByIndex(transaction.objectStore(PAGE_STORE).index('byChapter'), IDBKeyRange.only([source, comicId, chapterId]));
+  transaction.objectStore(CHAPTER_STORE).delete([source, comicId, chapterId]);
 
   await transactionToPromise(transaction);
-  releaseChapterObjectUrls(comicId, chapterId);
+  releaseChapterObjectUrls(source, comicId, chapterId);
 }
 
 /** 申请持久化存储，尽量避免浏览器在空间紧张时清理下载数据 */

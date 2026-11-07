@@ -4,6 +4,7 @@ import type { ComicChapterGroup } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { useActivated } from '@/hooks/activated';
 import { useDownloadStore } from '@/stores/download';
+import { comicKey } from '@/utils';
 import { handleError } from '@/utils/error';
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import {
@@ -20,18 +21,20 @@ import {
 import { computed, onActivated, ref, watch } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 
-const route = useRoute('/comic/[comicId]/');
+const route = useRoute('/comic/[source]/[comicId]/');
 const router = useRouter();
 const queryClient = useQueryClient();
 const downloadStore = useDownloadStore();
 
+const source = computed(() => route.params.source);
 const comicId = computed(() => route.params.comicId);
+const key = computed(() => comicKey(source.value, comicId.value));
 
 const activated = useActivated();
 
 const { data: comic } = useQuery({
-  queryKey: [getComic.name, comicId],
-  queryFn: () => getComic({ id: comicId.value }),
+  queryKey: [getComic.name, source, comicId],
+  queryFn: () => getComic({ source: source.value, id: comicId.value }),
   refetchOnWindowFocus: false,
   staleTime: 5 * 60 * 1000,
   enabled: () => Boolean(activated.value && comicId.value),
@@ -40,8 +43,8 @@ const { data: comic } = useQuery({
 const chapterGroups = ref<(ComicChapterGroup & { reverse: boolean })[]>([]);
 
 const { data: checkData, refetch: check } = useQuery({
-  queryKey: [checkInLibrary.name, comicId],
-  queryFn: () => checkInLibrary({ id: comicId.value }),
+  queryKey: [checkInLibrary.name, source, comicId],
+  queryFn: () => checkInLibrary({ source: source.value, id: comicId.value }),
   enabled: () => Boolean(activated.value && comicId.value),
 });
 onActivated(check);
@@ -49,8 +52,8 @@ onActivated(check);
 const inLibrary = computed(() => checkData.value?.inLibrary ?? false);
 
 const { data: historyData, refetch: refetchHistory } = useQuery({
-  queryKey: [getComicHistory.name, comicId],
-  queryFn: () => getComicHistory({ id: comicId.value }),
+  queryKey: [getComicHistory.name, source, comicId],
+  queryFn: () => getComicHistory({ source: source.value, id: comicId.value }),
   enabled: () => Boolean(activated.value && comicId.value),
 });
 onActivated(refetchHistory);
@@ -58,7 +61,7 @@ onActivated(refetchHistory);
 const history = computed(() => historyData.value?.history);
 const currentChapterId = computed(() => history.value?.chapterId ?? '');
 
-const localComic = computed(() => downloadStore.comicById(comicId.value));
+const localComic = computed(() => downloadStore.comicById(source.value, comicId.value));
 const displayComic = computed(() => comic.value ?? localComic.value);
 const comicCover = computed(() => localComic.value?.coverUrl || displayComic.value?.cover || '');
 
@@ -69,9 +72,9 @@ const allChapters = computed(() => chapterGroups.value.flatMap((group) => group.
 const selectedCount = computed(() => selectedChapterIds.value.length);
 
 const downloadedChapterIds = computed(
-  () => new Set((downloadStore.chaptersByComic[comicId.value] ?? []).map((chapter) => chapter.chapterId)),
+  () => new Set((downloadStore.chaptersByComic[key.value] ?? []).map((chapter) => chapter.chapterId)),
 );
-const partialChapterIds = computed(() => new Set(downloadStore.partialChaptersByComic[comicId.value] ?? []));
+const partialChapterIds = computed(() => new Set(downloadStore.partialChaptersByComic[key.value] ?? []));
 const selectableChapterIds = computed(() =>
   allChapters.value.filter((chapter) => !downloadedChapterIds.value.has(chapter.id)).map((chapter) => chapter.id),
 );
@@ -82,10 +85,14 @@ const allSelected = computed(
 );
 
 const runningBatch = computed(() =>
-  downloadStore.batches.find((batch) => batch.comicId === comicId.value && batch.status === 'running'),
+  downloadStore.batches.find(
+    (batch) => batch.source === source.value && batch.comicId === comicId.value && batch.status === 'running',
+  ),
 );
 const errorBatch = computed(() =>
-  downloadStore.batches.find((batch) => batch.comicId === comicId.value && batch.status === 'error'),
+  downloadStore.batches.find(
+    (batch) => batch.source === source.value && batch.comicId === comicId.value && batch.status === 'error',
+  ),
 );
 const runningPercent = computed(() => {
   const batch = runningBatch.value;
@@ -154,25 +161,25 @@ function confirmDownload() {
   const selected = new Set(selectedChapterIds.value);
   const chapters = allChapters.value
     .filter((chapter) => selected.has(chapter.id))
-    .map((chapter) => ({ id: chapter.id, comicId: comic.id, name: chapter.name }));
+    .map((chapter) => ({ source: comic.source, id: chapter.id, comicId: comic.id, name: chapter.name }));
 
   selecting.value = false;
   selectedChapterIds.value = [];
 
   void downloadStore.startDownload(comic, chapters).finally(() => {
-    queryClient.invalidateQueries({ queryKey: [getChapter.name, comic.id] });
+    queryClient.invalidateQueries({ queryKey: [getChapter.name, comic.source, comic.id] });
   });
 }
 
 onActivated(() => {
   void downloadStore.loadComics();
-  void downloadStore.loadChapters(comicId.value);
+  void downloadStore.loadChapters(source.value, comicId.value);
 });
 
-watch(comicId, () => {
+watch([source, comicId], () => {
   selecting.value = false;
   selectedChapterIds.value = [];
-  void downloadStore.loadChapters(comicId.value);
+  void downloadStore.loadChapters(source.value, comicId.value);
 });
 
 function toRead() {
@@ -180,7 +187,7 @@ function toRead() {
     ? `${history.value.chapterId}?page=${history.value.page}`
     : (displayComic.value?.firstChapterId ?? '');
   if (chapterId) {
-    router.push(`/comic/${comicId.value}/${chapterId}`);
+    router.push(`/comic/${source.value}/${comicId.value}/${chapterId}`);
   }
 }
 
@@ -190,6 +197,7 @@ async function addComic() {
   }
   try {
     await addToLibrary({
+      source: displayComic.value.source,
       id: displayComic.value.id,
       name: displayComic.value.name,
       cover: displayComic.value.cover,
@@ -206,6 +214,7 @@ async function removeComic() {
   }
   try {
     await removeFromLibrary({
+      source: displayComic.value.source,
       id: displayComic.value.id,
     });
     await check();
@@ -351,7 +360,7 @@ watch(
                 v-else
                 class="flex w-full min-w-0 items-center gap-1 rounded-sm border px-2 py-1"
                 :class="{ 'border-primary/40 bg-primary/10 font-medium': isCurrentChapter(chapter.id) }"
-                :to="`/comic/${comicId}/${chapter.id}`"
+                :to="`/comic/${source}/${comicId}/${chapter.id}`"
               >
                 <span class="min-w-0 flex-1 truncate">{{ chapter.name }}</span>
                 <LoaderCircle v-if="isDownloading(chapter.id)" class="h-4 w-4 shrink-0 animate-spin" />

@@ -14,6 +14,7 @@ import type {
   GetComicResp,
   GetHistoryResp,
   GetLibraryResp,
+  GetSourcesResp,
   RemoveFromLibraryReq,
   SearchComicReq,
   SearchComicResp,
@@ -33,8 +34,12 @@ export function getChapter(params: GetChapterReq): Promise<GetChapterResp> {
   return get(Endpoints.GetChapter, params);
 }
 
-export function proxyImage(url: string) {
-  return `${Endpoints.ProxyImage}?url=${encodeURIComponent(url)}`;
+export function getSources(): Promise<GetSourcesResp> {
+  return get(Endpoints.GetSources);
+}
+
+export function proxyImage(source: string, url: string) {
+  return `${Endpoints.ProxyImage}?source=${encodeURIComponent(source)}&url=${encodeURIComponent(url)}`;
 }
 
 export function checkPassword(data: CheckPasswordReq): Promise<CheckPasswordResp> {

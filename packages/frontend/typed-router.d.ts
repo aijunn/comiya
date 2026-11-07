@@ -20,8 +20,8 @@ declare module 'vue-router/auto-routes' {
   export interface RouteNamedMap {
     '/': RouteRecordInfo<'/', '/', Record<never, never>, Record<never, never>>,
     '/[...path]': RouteRecordInfo<'/[...path]', '/:path(.*)', { path: ParamValue<true> }, { path: ParamValue<false> }>,
-    '/comic/[comicId]/': RouteRecordInfo<'/comic/[comicId]/', '/comic/:comicId', { comicId: ParamValue<true> }, { comicId: ParamValue<false> }>,
-    '/comic/[comicId]/[chapterId]': RouteRecordInfo<'/comic/[comicId]/[chapterId]', '/comic/:comicId/:chapterId', { comicId: ParamValue<true>, chapterId: ParamValue<true> }, { comicId: ParamValue<false>, chapterId: ParamValue<false> }>,
+    '/comic/[source]/[comicId]/': RouteRecordInfo<'/comic/[source]/[comicId]/', '/comic/:source/:comicId', { source: ParamValue<true>, comicId: ParamValue<true> }, { source: ParamValue<false>, comicId: ParamValue<false> }>,
+    '/comic/[source]/[comicId]/[chapterId]': RouteRecordInfo<'/comic/[source]/[comicId]/[chapterId]', '/comic/:source/:comicId/:chapterId', { source: ParamValue<true>, comicId: ParamValue<true>, chapterId: ParamValue<true> }, { source: ParamValue<false>, comicId: ParamValue<false>, chapterId: ParamValue<false> }>,
     '/downloads': RouteRecordInfo<'/downloads', '/downloads', Record<never, never>, Record<never, never>>,
     '/history': RouteRecordInfo<'/history', '/history', Record<never, never>, Record<never, never>>,
     '/library': RouteRecordInfo<'/library', '/library', Record<never, never>, Record<never, never>>,

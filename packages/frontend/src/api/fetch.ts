@@ -22,7 +22,9 @@ function get(url: string, params?: Record<string, unknown>) {
   let fullUrl = url;
   if (params) {
     const tranformed = Object.fromEntries(
-      Object.entries(params).map(([key, value]) => [key, typeof value === 'string' ? value : String(value)]),
+      Object.entries(params)
+        .filter(([, value]) => value !== undefined && value !== null)
+        .map(([key, value]) => [key, typeof value === 'string' ? value : String(value)]),
     );
     const queryString = new URLSearchParams(tranformed).toString();
     fullUrl = `${url}?${queryString}`;

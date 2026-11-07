@@ -18,6 +18,7 @@ import {
   type DownloadComicRecord,
   type DownloadedComic,
 } from '@/types/download';
+import { comicKey } from '@/utils';
 import { handleError } from '@/utils/error';
 
 const MAX_CHAPTER_ATTEMPTS = 3;
@@ -28,6 +29,7 @@ function sleep(ms: number) {
 
 function toDownloadedComic(record: DownloadComicRecord, chapters: DownloadChapterRecord[]): DownloadedComic {
   return {
+    source: record.source,
     id: record.id,
     name: record.name,
     cover: record.cover,
@@ -71,37 +73,44 @@ export const useDownloadStore = defineStore('download', {
   getters: {
     runningBatches: (state) => state.batches.filter((batch) => batch.status === 'running'),
     errorBatches: (state) => state.batches.filter((batch) => batch.status === 'error'),
-    comicById: (state) => (comicId: string) => state.comics.find((comic) => comic.id === comicId),
-    isChapterDownloaded: (state) => (comicId: string, chapterId: string) =>
-      (state.chaptersByComic[comicId] ?? []).some((chapter) => chapter.chapterId === chapterId),
-    hasRunningBatch: (state) => (comicId: string) =>
-      state.batches.some((batch) => batch.comicId === comicId && batch.status === 'running'),
+    comicById: (state) => (source: string, comicId: string) =>
+      state.comics.find((comic) => comic.source === source && comic.id === comicId),
+    isChapterDownloaded: (state) => (source: string, comicId: string, chapterId: string) =>
+      (state.chaptersByComic[comicKey(source, comicId)] ?? []).some((chapter) => chapter.chapterId === chapterId),
+    hasRunningBatch: (state) => (source: string, comicId: string) =>
+      state.batches.some((batch) => batch.source === source && batch.comicId === comicId && batch.status === 'running'),
   },
 
   actions: {
     async loadComics() {
       try {
         const records = await listComicRecords();
-        this.comics = records.map((record) => toDownloadedComic(record, this.chaptersByComic[record.id] ?? []));
+        this.comics = records.map((record) =>
+          toDownloadedComic(record, this.chaptersByComic[comicKey(record.source, record.id)] ?? []),
+        );
         this.loadedComics = true;
       } catch (error) {
         handleError(error);
       }
     },
 
-    async loadChapters(comicId: string) {
+    async loadChapters(source: string, comicId: string) {
       try {
-        const [chapters, pageCounts] = await Promise.all([listChapterRecords(comicId), listChapterPageCounts(comicId)]);
-        this.chaptersByComic[comicId] = chapters;
-        this.partialChaptersByComic[comicId] = toPartialChapterIds(chapters, pageCounts);
-        this.loadedChapters[comicId] = true;
+        const [chapters, pageCounts] = await Promise.all([
+          listChapterRecords(source, comicId),
+          listChapterPageCounts(source, comicId),
+        ]);
+        const key = comicKey(source, comicId);
+        this.chaptersByComic[key] = chapters;
+        this.partialChaptersByComic[key] = toPartialChapterIds(chapters, pageCounts);
+        this.loadedChapters[key] = true;
 
-        const index = this.comics.findIndex((comic) => comic.id === comicId);
+        const index = this.comics.findIndex((comic) => comic.source === source && comic.id === comicId);
         if (index === -1) {
           return;
         }
 
-        const record = await getComicRecord(comicId);
+        const record = await getComicRecord(source, comicId);
         if (record) {
           this.comics[index] = toDownloadedComic(record, chapters);
         }
@@ -116,32 +125,33 @@ export const useDownloadStore = defineStore('download', {
         const entries = await Promise.all(
           records.map(async (record) => ({
             record,
-            chapters: await listChapterRecords(record.id),
-            pageCounts: await listChapterPageCounts(record.id),
+            key: comicKey(record.source, record.id),
+            chapters: await listChapterRecords(record.source, record.id),
+            pageCounts: await listChapterPageCounts(record.source, record.id),
           })),
         );
 
         this.comics = entries.map(({ record, chapters }) => toDownloadedComic(record, chapters));
-        this.chaptersByComic = Object.fromEntries(entries.map(({ record, chapters }) => [record.id, chapters]));
+        this.chaptersByComic = Object.fromEntries(entries.map(({ key, chapters }) => [key, chapters]));
         this.partialChaptersByComic = Object.fromEntries(
-          entries.map(({ record, chapters, pageCounts }) => [record.id, toPartialChapterIds(chapters, pageCounts)]),
+          entries.map(({ key, chapters, pageCounts }) => [key, toPartialChapterIds(chapters, pageCounts)]),
         );
-        this.loadedChapters = Object.fromEntries(entries.map(({ record }) => [record.id, true]));
+        this.loadedChapters = Object.fromEntries(entries.map(({ key }) => [key, true]));
         this.loadedComics = true;
       } catch (error) {
         handleError(error);
       }
     },
 
-    async refreshComic(comicId: string) {
+    async refreshComic(source: string, comicId: string) {
       try {
-        const record = await getComicRecord(comicId);
+        const record = await getComicRecord(source, comicId);
         if (!record) {
           return;
         }
 
-        const view = toDownloadedComic(record, this.chaptersByComic[comicId] ?? []);
-        const index = this.comics.findIndex((comic) => comic.id === comicId);
+        const view = toDownloadedComic(record, this.chaptersByComic[comicKey(source, comicId)] ?? []);
+        const index = this.comics.findIndex((comic) => comic.source === source && comic.id === comicId);
         if (index === -1) {
           this.comics.push(view);
         } else {
@@ -153,14 +163,17 @@ export const useDownloadStore = defineStore('download', {
     },
 
     async startDownload(comic: Comic, chapters: ComicChapterBrief[]) {
-      if (!chapters.length || this.hasRunningBatch(comic.id)) {
+      if (!chapters.length || this.hasRunningBatch(comic.source, comic.id)) {
         return;
       }
 
-      this.batches = this.batches.filter((batch) => !(batch.comicId === comic.id && batch.status === 'error'));
+      this.batches = this.batches.filter(
+        (batch) => !(batch.source === comic.source && batch.comicId === comic.id && batch.status === 'error'),
+      );
 
       const batch = reactive<DownloadBatch>({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        source: comic.source,
         comicId: comic.id,
         comicName: comic.name,
         total: chapters.length,
@@ -174,7 +187,7 @@ export const useDownloadStore = defineStore('download', {
 
       try {
         for (const chapter of chapters) {
-          if (this.isChapterDownloaded(comic.id, chapter.id)) {
+          if (this.isChapterDownloaded(comic.source, comic.id, chapter.id)) {
             batch.completed += 1;
             continue;
           }
@@ -212,15 +225,16 @@ export const useDownloadStore = defineStore('download', {
               throw lastError ?? new Error('下载失败');
             }
 
-            this.chaptersByComic[comic.id] = [
-              ...(this.chaptersByComic[comic.id] ?? []).filter((item) => item.chapterId !== record.chapterId),
+            const key = comicKey(comic.source, comic.id);
+            this.chaptersByComic[key] = [
+              ...(this.chaptersByComic[key] ?? []).filter((item) => item.chapterId !== record.chapterId),
               record,
             ];
-            this.loadedChapters[comic.id] = true;
-            this.partialChaptersByComic[comic.id] = (this.partialChaptersByComic[comic.id] ?? []).filter(
+            this.loadedChapters[key] = true;
+            this.partialChaptersByComic[key] = (this.partialChaptersByComic[key] ?? []).filter(
               (chapterId) => chapterId !== chapter.id,
             );
-            await this.refreshComic(comic.id);
+            await this.refreshComic(comic.source, comic.id);
             batch.completed += 1;
           } catch (error) {
             batch.failed += 1;
@@ -232,11 +246,12 @@ export const useDownloadStore = defineStore('download', {
             }
 
             try {
-              const pageCount = await countChapterPages(comic.id, chapter.id);
+              const pageCount = await countChapterPages(comic.source, comic.id, chapter.id);
               if (pageCount > 0) {
-                const partial = new Set(this.partialChaptersByComic[comic.id] ?? []);
+                const key = comicKey(comic.source, comic.id);
+                const partial = new Set(this.partialChaptersByComic[key] ?? []);
                 partial.add(chapter.id);
-                this.partialChaptersByComic[comic.id] = [...partial];
+                this.partialChaptersByComic[key] = [...partial];
               }
             } catch (partialError) {
               handleError(partialError);
@@ -268,18 +283,19 @@ export const useDownloadStore = defineStore('download', {
       }
     },
 
-    async removeComic(comicId: string) {
-      if (this.hasRunningBatch(comicId)) {
+    async removeComic(source: string, comicId: string) {
+      if (this.hasRunningBatch(source, comicId)) {
         return;
       }
 
       try {
-        await deleteComicRecord(comicId);
-        this.comics = this.comics.filter((comic) => comic.id !== comicId);
-        delete this.chaptersByComic[comicId];
-        delete this.partialChaptersByComic[comicId];
-        delete this.loadedChapters[comicId];
-        this.batches = this.batches.filter((batch) => batch.comicId !== comicId);
+        await deleteComicRecord(source, comicId);
+        const key = comicKey(source, comicId);
+        this.comics = this.comics.filter((comic) => !(comic.source === source && comic.id === comicId));
+        delete this.chaptersByComic[key];
+        delete this.partialChaptersByComic[key];
+        delete this.loadedChapters[key];
+        this.batches = this.batches.filter((batch) => !(batch.source === source && batch.comicId === comicId));
       } catch (error) {
         handleError(error);
       }

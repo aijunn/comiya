@@ -15,15 +15,27 @@ where
     pub data: Option<T>,
 }
 
-pub struct AppError(anyhow::Error);
+pub struct AppError {
+    status: StatusCode,
+    error: anyhow::Error,
+}
+
+impl AppError {
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            error: anyhow::anyhow!(message.into()),
+        }
+    }
+}
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            self.status,
             Json(Resp::<()> {
                 code: -1,
-                msg: self.0.to_string(),
+                msg: self.error.to_string(),
                 data: None,
             }),
         )
@@ -36,7 +48,10 @@ where
     E: Into<anyhow::Error>,
 {
     fn from(value: E) -> Self {
-        Self(value.into())
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            error: value.into(),
+        }
     }
 }
 

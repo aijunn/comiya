@@ -16,3 +16,8 @@ export function formatBytes(bytes: number): string {
 
   return `${value.toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
 }
+
+/** In-memory key for records that belong to a specific comic source. */
+export function comicKey(source: string, comicId: string): string {
+  return `${source}::${comicId}`;
+}

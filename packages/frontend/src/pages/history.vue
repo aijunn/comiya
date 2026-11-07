@@ -2,12 +2,16 @@
 import { deleteHistory, getHistory } from '@/api';
 import PageHeader from '@/components/PageHeader.vue';
 import { Button } from '@/components/ui/button';
+import { useSources } from '@/composables/useSources';
+import { comicKey } from '@/utils';
 import { handleError } from '@/utils/error';
 import { useQuery } from '@tanstack/vue-query';
 import dayjs from 'dayjs';
 import { Trash2 } from 'lucide-vue-next';
 import { computed, onActivated } from 'vue';
 import { RouterLink } from 'vue-router';
+
+const { sourceName } = useSources();
 
 const { data, refetch } = useQuery({
   queryKey: [getHistory.name],
@@ -16,9 +20,9 @@ const { data, refetch } = useQuery({
 
 const items = computed(() => (data.value ?? []).filter((item) => item.visible));
 
-async function onDelete(comicId: string) {
+async function onDelete(source: string, comicId: string) {
   try {
-    await deleteHistory({ comicId });
+    await deleteHistory({ source, comicId });
     refetch();
   } catch (error) {
     handleError(error);
@@ -34,9 +38,9 @@ onActivated(refetch);
 
     <RouterLink
       v-for="item in items"
-      :key="item.comicId"
+      :key="comicKey(item.source, item.comicId)"
       class="flex cursor-pointer gap-1 rounded border p-4 shadow"
-      :to="`/comic/${item.comicId}/${item.chapterId}?page=${item.page}`"
+      :to="`/comic/${item.source}/${item.comicId}/${item.chapterId}?page=${item.page}`"
     >
       <div class="min-w-0 flex-1">
         <div class="flex flex-col gap-1 sm:flex-row sm:gap-4">
@@ -44,8 +48,9 @@ onActivated(refetch);
 
           <div class="truncate">[{{ item.chapterName }}] (P{{ item.page }})</div>
         </div>
-        <div class="mt-2 truncate text-sm text-gray-400">
-          上次观看: {{ dayjs(item.updatedAt).format('YYYY/MM/DD HH:mm') }}
+        <div class="mt-2 flex gap-2 truncate text-sm text-gray-400">
+          <span>{{ sourceName(item.source) }}</span>
+          <span>上次观看: {{ dayjs(item.updatedAt).format('YYYY/MM/DD HH:mm') }}</span>
         </div>
       </div>
 
@@ -53,7 +58,7 @@ onActivated(refetch);
         class="-translate-y-1.5 translate-x-2.5"
         variant="ghost"
         size="icon"
-        @click.stop.prevent="onDelete(item.comicId)"
+        @click.stop.prevent="onDelete(item.source, item.comicId)"
       >
         <Trash2 />
       </Button>

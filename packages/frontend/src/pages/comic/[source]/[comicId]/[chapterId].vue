@@ -48,18 +48,19 @@ onDeactivated(() => {
 
 const activated = useActivated();
 
-const route = useRoute('/comic/[comicId]/[chapterId]');
+const route = useRoute('/comic/[source]/[comicId]/[chapterId]');
 const router = useRouter();
 
 const { previousRoute } = usePreviousRoute();
-const fromComic = computed(() => previousRoute.value?.name === '/comic/[comicId]/');
+const fromComic = computed(() => previousRoute.value?.name === '/comic/[source]/[comicId]/');
 
+const source = computed(() => route.params.source);
 const comicId = computed(() => route.params.comicId);
 const chapterId = computed(() => route.params.chapterId);
 
 const { data, isFetching } = useQuery({
-  queryKey: [getChapter.name, comicId, chapterId],
-  queryFn: () => getChapterForReader(comicId.value, chapterId.value),
+  queryKey: [getChapter.name, source, comicId, chapterId],
+  queryFn: () => getChapterForReader(source.value, comicId.value, chapterId.value),
   staleTime: Infinity,
   gcTime: Infinity,
 });
@@ -81,7 +82,7 @@ const hasPrev = computed(() => Boolean(data.value?.prevId && data.value.prevId !
 const activeIndex = ref([0]);
 const tempIndex = ref([0]);
 
-watch([comicId, chapterId, route], () => {
+watch([source, comicId, chapterId, route], () => {
   activeIndex.value = [0];
   tempIndex.value = [0];
   scrollToPage(0);
@@ -192,13 +193,13 @@ function toPrevPage() {
 
 function toPreviousChapter() {
   if (hasPrev.value && data.value) {
-    router.replace(`/comic/${comicId.value}/${data.value.prevId}`);
+    router.replace(`/comic/${source.value}/${comicId.value}/${data.value.prevId}`);
   }
 }
 
 function toNextChapter() {
   if (hasNext.value && data.value) {
-    router.replace(`/comic/${comicId.value}/${data.value.nextId}`);
+    router.replace(`/comic/${source.value}/${comicId.value}/${data.value.nextId}`);
   }
 }
 
@@ -224,9 +225,9 @@ watch(toEndDistance, () => {
   if (toEndDistance.value < 5 && data.value) {
     const nextChapterId = data.value.nextId;
     queryClient.prefetchQuery({
-      queryKey: [getChapter.name, comicId.value, nextChapterId],
+      queryKey: [getChapter.name, source.value, comicId.value, nextChapterId],
       queryFn: async () => {
-        const nextChapter = await getChapterForReader(comicId.value, nextChapterId);
+        const nextChapter = await getChapterForReader(source.value, comicId.value, nextChapterId);
 
         nextChapter.images.slice(0, 5).forEach((image) => {
           if (!image.startsWith('blob:')) {
@@ -245,7 +246,7 @@ watch(toEndDistance, () => {
 // update watch history
 const historyDirty = ref(false);
 const checkTimer = ref(0);
-watch([comicId, chapterId, activeIndex], () => {
+watch([source, comicId, chapterId, activeIndex], () => {
   if (isFetching.value || !data.value) {
     return;
   }
@@ -254,6 +255,7 @@ watch([comicId, chapterId, activeIndex], () => {
 function update() {
   if (historyDirty.value && data.value && comicId.value && chapterId.value && activated.value) {
     upsertHistory({
+      source: source.value,
       comicId: comicId.value,
       chapterId: chapterId.value,
       page: activeIndex.value[0] + 1,
@@ -387,7 +389,7 @@ useEventListener(window, 'beforeunload', update);
                     if (fromComic) {
                       router.back();
                     } else {
-                      router.replace(`/comic/${comicId}`);
+                      router.replace(`/comic/${source}/${comicId}`);
                     }
                   "
                 >

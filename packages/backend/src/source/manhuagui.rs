@@ -1,73 +1,55 @@
 use anyhow::Result;
+use async_trait::async_trait;
 use dom_query::{Document, Selection};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ComicBrief {
-    pub id: String,
-    pub name: String,
-    pub cover: String,
-    pub author: Vec<String>,
-    pub intro: String,
-    pub pub_date: String,
+use super::types::{Comic, ComicBrief, ComicChapter, ComicChapterBrief, ComicChapterGroup};
+use super::ComicSource;
+
+pub const SOURCE_ID: &str = "manhuagui";
+pub const SOURCE_NAME: &str = "漫画柜";
+
+pub struct Manhuagui {
+    client: reqwest::Client,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ComicChapterBrief {
-    pub id: String,
-    pub comic_id: String,
-    pub name: String,
-}
+impl Manhuagui {
+    pub fn new(client: reqwest::Client) -> Self {
+        Self { client }
+    }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ComicChapterGroup {
-    pub name: String,
-    pub chapters: Vec<ComicChapterBrief>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Comic {
-    pub id: String,
-    pub name: String,
-    pub cover: String,
-    pub author: Vec<String>,
-    pub intro: String,
-    pub pub_date: String,
-    pub chapter_groups: Vec<ComicChapterGroup>,
-    pub first_chapter_id: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ComicChapter {
-    pub id: String,
-    pub comic_id: String,
-    pub name: String,
-    pub comic_name: String,
-    pub next_id: String,
-    pub prev_id: String,
-    pub images: Vec<String>,
-}
-
-#[trait_variant::make(Send)]
-pub trait Site {
-    async fn search_comic(&self, keyword: String) -> Result<Vec<ComicBrief>>;
-    async fn get_comic(&self, id: String) -> Result<Comic>;
-    async fn get_chapter(&self, comic_id: String, chapter_id: String) -> Result<ComicChapter>;
-}
-
-pub struct Manhuagui;
-
-impl Site for Manhuagui {
-    async fn get_comic(&self, id: String) -> Result<Comic> {
-        let body = reqwest::get(format!("https://www.manhuagui.com/comic/{id}"))
+    async fn get_text(&self, url: String) -> Result<String> {
+        let body = self
+            .client
+            .get(url)
+            .send()
             .await?
+            .error_for_status()?
             .text()
+            .await?;
+
+        Ok(body)
+    }
+}
+
+#[async_trait]
+impl ComicSource for Manhuagui {
+    fn id(&self) -> &'static str {
+        SOURCE_ID
+    }
+
+    fn name(&self) -> &'static str {
+        SOURCE_NAME
+    }
+
+    fn image_headers(&self) -> &'static [(&'static str, &'static str)] {
+        &[("Referer", "https://www.manhuagui.com/")]
+    }
+
+    async fn get_comic(&self, id: &str) -> Result<Comic> {
+        let body = self
+            .get_text(format!("https://www.manhuagui.com/comic/{id}"))
             .await?;
 
         let mut doc = Document::from(body);
@@ -81,7 +63,7 @@ impl Site for Manhuagui {
                 pub_date: ".book-detail>.detail-list>li:first-child>span:first-child>a",
                 intro: "#intro-cut",
             },
-            id.clone(),
+            id,
         );
 
         let first_chapter_id = doc
@@ -116,7 +98,7 @@ impl Site for Manhuagui {
                 let chapters = doc
                     .select(&format!("h4:nth-of-type({}) ~ .chapter-list ul", index + 1))
                     .iter()
-                    .map(|ul_node| {
+                    .flat_map(|ul_node| {
                         ul_node
                             .select("li a")
                             .iter()
@@ -133,14 +115,14 @@ impl Site for Manhuagui {
                                 // );
                                 let name = a_node.attr_or("title", "").to_string();
                                 ComicChapterBrief {
+                                    source: SOURCE_ID.to_string(),
                                     id: chapter_id,
-                                    comic_id: id.clone(),
+                                    comic_id: id.to_string(),
                                     name,
                                 }
                             })
                             .rev()
                     })
-                    .flatten()
                     .collect();
 
                 ComicChapterGroup {
@@ -151,6 +133,7 @@ impl Site for Manhuagui {
             .collect();
 
         Ok(Comic {
+            source: brief.source,
             id: brief.id,
             name: brief.name,
             cover: brief.cover,
@@ -162,11 +145,10 @@ impl Site for Manhuagui {
         })
     }
 
-    async fn search_comic(&self, keyword: String) -> Result<Vec<ComicBrief>> {
-        let encoded = urlencoding::encode(&keyword);
-        let body = reqwest::get(format!("https://www.manhuagui.com/s/{}.html", encoded))
-            .await?
-            .text()
+    async fn search_comic(&self, keyword: &str) -> Result<Vec<ComicBrief>> {
+        let encoded = urlencoding::encode(keyword);
+        let body = self
+            .get_text(format!("https://www.manhuagui.com/s/{}.html", encoded))
             .await?;
 
         let doc = Document::from(body);
@@ -190,7 +172,7 @@ impl Site for Manhuagui {
                     .trim_start_matches("/comic/")
                     .trim_end_matches("/")
                     .to_string();
-                let mut brief = parse_brief(&item, &selectors, id);
+                let mut brief = parse_brief(&item, &selectors, &id);
                 brief.intro = brief
                     .intro
                     .trim_start_matches("简介：")
@@ -203,13 +185,12 @@ impl Site for Manhuagui {
         Ok(list)
     }
 
-    async fn get_chapter(&self, comic_id: String, chapter_id: String) -> Result<ComicChapter> {
-        let body = reqwest::get(format!(
-            "https://www.manhuagui.com/comic/{comic_id}/{chapter_id}.html"
-        ))
-        .await?
-        .text()
-        .await?;
+    async fn get_chapter(&self, comic_id: &str, chapter_id: &str) -> Result<ComicChapter> {
+        let body = self
+            .get_text(format!(
+                "https://www.manhuagui.com/comic/{comic_id}/{chapter_id}.html"
+            ))
+            .await?;
 
         let doc = Document::from(body);
 
@@ -314,8 +295,9 @@ impl Site for Manhuagui {
         });
 
         Ok(ComicChapter {
-            id: chapter_id,
-            comic_id,
+            source: SOURCE_ID.to_string(),
+            id: chapter_id.to_string(),
+            comic_id: comic_id.to_string(),
             name,
             comic_name,
             prev_id: prev_id.to_string(),
@@ -333,15 +315,11 @@ struct BriefSelectors<'a> {
     intro: &'a str,
 }
 
-fn parse_brief(node: &Selection, selectors: &BriefSelectors, id: String) -> ComicBrief {
-    let name = node
-        .select_single(&selectors.name)
-        .text()
-        .trim()
-        .to_string();
+fn parse_brief(node: &Selection, selectors: &BriefSelectors, id: &str) -> ComicBrief {
+    let name = node.select_single(selectors.name).text().trim().to_string();
 
     let mut cover = node
-        .select_single(&selectors.cover)
+        .select_single(selectors.cover)
         .attr_or("src", "")
         .trim()
         .to_string();
@@ -350,26 +328,27 @@ fn parse_brief(node: &Selection, selectors: &BriefSelectors, id: String) -> Comi
     }
 
     let author: Vec<String> = node
-        .select(&selectors.author)
+        .select(selectors.author)
         .iter()
         .map(|item| item.text().trim().to_string())
         .collect();
 
     let pub_date = node
-        .select_single(&selectors.pub_date)
+        .select_single(selectors.pub_date)
         .text()
         .trim()
         .trim_end_matches("年")
         .to_string();
 
     let intro = node
-        .select_single(&selectors.intro)
+        .select_single(selectors.intro)
         .text()
         .trim()
         .to_string();
 
     ComicBrief {
-        id,
+        source: SOURCE_ID.to_string(),
+        id: id.to_string(),
         name,
         cover,
         author,

@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use migration::{
     sea_orm::{Database, DatabaseConnection},
     Migrator, MigratorTrait,
 };
 use router::get_router;
+
+use crate::source::SourceRegistry;
 
 mod middleware;
 mod router;
@@ -12,6 +16,7 @@ mod types;
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
+    pub sources: Arc<SourceRegistry>,
 }
 
 pub async fn run() -> Result<()> {
@@ -19,7 +24,9 @@ pub async fn run() -> Result<()> {
 
     Migrator::up(&db, None).await?;
 
-    let state = AppState { db };
+    let sources = Arc::new(SourceRegistry::new()?);
+
+    let state = AppState { db, sources };
 
     let app = get_router().with_state(state);
 

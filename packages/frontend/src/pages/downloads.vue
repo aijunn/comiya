@@ -2,8 +2,9 @@
 import { getChapter } from '@/api';
 import PageHeader from '@/components/PageHeader.vue';
 import { Button } from '@/components/ui/button';
+import { useSources } from '@/composables/useSources';
 import { useDownloadStore } from '@/stores/download';
-import { formatBytes } from '@/utils';
+import { comicKey, formatBytes } from '@/utils';
 import { useQueryClient } from '@tanstack/vue-query';
 import { Download, LoaderCircle, Trash2 } from 'lucide-vue-next';
 import { computed, onActivated } from 'vue';
@@ -11,6 +12,7 @@ import { RouterLink } from 'vue-router';
 
 const queryClient = useQueryClient();
 const downloadStore = useDownloadStore();
+const { sourceName } = useSources();
 
 const comics = computed(() => downloadStore.comics);
 const runningBatches = computed(() => downloadStore.runningBatches);
@@ -26,20 +28,20 @@ function batchPercent(completed: number, total: number) {
   return total ? Math.round((completed / total) * 100) : 0;
 }
 
-function partialCount(comicId: string) {
-  return downloadStore.partialChaptersByComic[comicId]?.length ?? 0;
+function partialCount(source: string, comicId: string) {
+  return downloadStore.partialChaptersByComic[comicKey(source, comicId)]?.length ?? 0;
 }
 
-async function removeComic(comicId: string, name: string) {
-  if (downloadStore.hasRunningBatch(comicId)) {
+async function removeComic(source: string, comicId: string, name: string) {
+  if (downloadStore.hasRunningBatch(source, comicId)) {
     return;
   }
   if (!window.confirm(`确定删除《${name}》的全部下载吗？`)) {
     return;
   }
 
-  await downloadStore.removeComic(comicId);
-  queryClient.removeQueries({ queryKey: [getChapter.name, comicId] });
+  await downloadStore.removeComic(source, comicId);
+  queryClient.removeQueries({ queryKey: [getChapter.name, source, comicId] });
 }
 </script>
 
@@ -88,8 +90,8 @@ async function removeComic(comicId: string, name: string) {
     </div>
 
     <div v-else class="grid grid-cols-3 gap-4 sm:grid-cols-4 sm:gap-6 md:grid-cols-5 md:gap-8 lg:grid-cols-6">
-      <div v-for="comic in comics" :key="comic.id" class="group relative">
-        <RouterLink class="block w-full" :to="`/comic/${comic.id}`">
+      <div v-for="comic in comics" :key="comicKey(comic.source, comic.id)" class="group relative">
+        <RouterLink class="block w-full" :to="`/comic/${comic.source}/${comic.id}`">
           <img
             v-if="comic.coverUrl"
             class="aspect-[3/4] w-full rounded-sm object-cover shadow-lg"
@@ -100,11 +102,12 @@ async function removeComic(comicId: string, name: string) {
             <Download class="text-muted-foreground h-6 w-6" />
           </div>
           <div class="mt-2 truncate">{{ comic.name }}</div>
+          <div class="text-muted-foreground truncate text-xs">{{ sourceName(comic.source) }}</div>
           <div v-if="comic.chapterCount" class="text-muted-foreground truncate text-xs">
             {{ comic.chapterCount }} 章 · {{ formatBytes(comic.size) }}
           </div>
-          <div v-if="partialCount(comic.id)" class="truncate text-xs text-amber-600">
-            {{ partialCount(comic.id) }} 章待继续
+          <div v-if="partialCount(comic.source, comic.id)" class="truncate text-xs text-amber-600">
+            {{ partialCount(comic.source, comic.id) }} 章待继续
           </div>
         </RouterLink>
 
@@ -112,9 +115,9 @@ async function removeComic(comicId: string, name: string) {
           class="absolute right-1 top-1 h-7 w-7 opacity-80 hover:opacity-100"
           variant="secondary"
           size="icon"
-          :disabled="downloadStore.hasRunningBatch(comic.id)"
+          :disabled="downloadStore.hasRunningBatch(comic.source, comic.id)"
           aria-label="删除下载"
-          @click.stop.prevent="removeComic(comic.id, comic.name)"
+          @click.stop.prevent="removeComic(comic.source, comic.id, comic.name)"
         >
           <Trash2 />
         </Button>
