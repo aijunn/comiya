@@ -1,13 +1,8 @@
 import vue from '@vitejs/plugin-vue';
-import { readFileSync } from 'node:fs';
 import vueRouter from 'unplugin-vue-router/vite';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
-
-const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8')) as {
-  version: string;
-};
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -68,9 +63,6 @@ export default defineConfig({
       },
     }),
   ],
-  define: {
-    __APP_VERSION__: JSON.stringify(version),
-  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

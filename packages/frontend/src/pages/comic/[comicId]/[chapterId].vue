@@ -8,7 +8,6 @@ import { useActivated } from '@/hooks/activated';
 import { usePreviousRoute } from '@/hooks/previous-route';
 import { LocalStorageKey, ReadDirection } from '@/types/const';
 import { resetThemeColor, setThemeColor } from '@/utils/theme-color';
-import { APP_VERSION } from '@/version';
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import { onKeyStroke, useDebounceFn, useEventListener, useLocalStorage, useMediaQuery } from '@vueuse/core';
 import {
@@ -396,20 +395,17 @@ useEventListener(window, 'beforeunload', update);
               </div>
 
               <CollapsibleContent>
-                <div class="relative">
-                  <div class="full flex gap-4 px-4 pb-4 pt-2">
-                    <div
-                      v-for="option in directionOptions"
-                      :key="option.value"
-                      class="flex flex-1 cursor-pointer flex-col items-center gap-1 rounded border-[1.5px] border-white p-2 opacity-40"
-                      :class="{ '!opacity-100': readDirection === option.value }"
-                      @click="onDirectionChange(option.value)"
-                    >
-                      <component :is="option.icon" />
-                      {{ option.title }}
-                    </div>
+                <div class="full flex gap-4 px-4 pb-4 pt-2">
+                  <div
+                    v-for="option in directionOptions"
+                    :key="option.value"
+                    class="flex flex-1 cursor-pointer flex-col items-center gap-1 rounded border-[1.5px] border-white p-2 opacity-40"
+                    :class="{ '!opacity-100': readDirection === option.value }"
+                    @click="onDirectionChange(option.value)"
+                  >
+                    <component :is="option.icon" />
+                    {{ option.title }}
                   </div>
-                  <div class="absolute bottom-1 right-2 text-[10px] leading-none text-white/40">v{{ APP_VERSION }}</div>
                 </div>
               </CollapsibleContent>
             </div>
