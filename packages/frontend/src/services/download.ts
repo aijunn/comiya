@@ -2,6 +2,7 @@ import { getChapter, proxyImage } from '@/api';
 import type { Comic, ComicChapter, ComicChapterBrief } from '@/api/types';
 import type { DownloadChapterRecord, DownloadComicRecord, DownloadPageRecord } from '@/types/download';
 import { comicKey } from '@/utils';
+import { isSameChapterName, isSameComicName } from '@/utils/comicMatch';
 
 const DB_NAME = 'comiya-downloads';
 const DB_VERSION = 2;
@@ -587,7 +588,35 @@ export async function readDownloadedChapter(
 }
 
 /**
- * 阅读器使用的章节数据：优先本地下载，未下载时回退到远端接口。
+ * 在其他来源的已下载记录里查找同一本漫画的同一章节。
+ * 图片字节与来源无关，因此换源后仍然可以复用本地缓存。
+ */
+export async function findEquivalentDownloadedChapter(
+  comicName: string,
+  chapterName: string,
+): Promise<ComicChapter | null> {
+  const comics = await listComicRecords();
+  const candidates = comics.filter((record) => isSameComicName(record.name, comicName));
+
+  for (const comic of candidates) {
+    const chapters = await listChapterRecords(comic.source, comic.id);
+    const match = chapters.find((chapter) => isSameChapterName(chapter.name, chapterName));
+    if (!match) {
+      continue;
+    }
+
+    const local = await readDownloadedChapter(comic.source, comic.id, match.chapterId);
+    if (local) {
+      return local;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 阅读器使用的章节数据：优先当前源的本地下载；当前源未下载时先取远端元数据，
+ * 再尝试复用其他源中同漫画、同章节的本地图片缓存。
  * 返回的 images 已经是可直接用于 <img> 的地址（代理地址或 object URL）。
  */
 export async function getChapterForReader(source: string, comicId: string, chapterId: string): Promise<ComicChapter> {
@@ -601,6 +630,16 @@ export async function getChapterForReader(source: string, comicId: string, chapt
   }
 
   const remote = await getChapter({ source, comicId, chapterId });
+
+  try {
+    const cached = await findEquivalentDownloadedChapter(remote.comicName, remote.name);
+    if (cached) {
+      return { ...remote, images: cached.images };
+    }
+  } catch (error) {
+    console.error('[download] 读取跨源本地章节失败', error);
+  }
+
   return { ...remote, images: remote.images.map((image) => proxyImage(source, image)) };
 }
 

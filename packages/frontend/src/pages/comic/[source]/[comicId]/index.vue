@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import { addToLibrary, checkInLibrary, getChapter, getComic, getComicHistory, removeFromLibrary } from '@/api';
 import type { ComicChapterGroup } from '@/api/types';
+import SourceSheet from '@/components/SourceSheet.vue';
 import { Button } from '@/components/ui/button';
+import { useSources } from '@/composables/useSources';
 import { useActivated } from '@/hooks/activated';
+import { switchComicSource } from '@/services/sourceSwitch';
 import { useDownloadStore } from '@/stores/download';
 import { comicKey } from '@/utils';
-import { handleError } from '@/utils/error';
+import { getErrorMessage, handleError } from '@/utils/error';
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import {
   ArrowDown01,
   ArrowDown10,
+  ArrowLeftRight,
   Check,
   ChevronLeft,
   CircleArrowDown,
@@ -18,7 +22,7 @@ import {
   LoaderCircle,
   Star,
 } from 'lucide-vue-next';
-import { computed, onActivated, ref, watch } from 'vue';
+import { computed, onActivated, onDeactivated, ref, watch } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 
 const route = useRoute('/comic/[source]/[comicId]/');
@@ -29,6 +33,11 @@ const downloadStore = useDownloadStore();
 const source = computed(() => route.params.source);
 const comicId = computed(() => route.params.comicId);
 const key = computed(() => comicKey(source.value, comicId.value));
+
+const { sources, sourceName } = useSources();
+const sourceSheetShow = ref(false);
+const switchingSource = ref('');
+const switchError = ref('');
 
 const activated = useActivated();
 
@@ -48,6 +57,14 @@ const { data: checkData, refetch: check } = useQuery({
   enabled: () => Boolean(activated.value && comicId.value),
 });
 onActivated(check);
+onActivated(() => {
+  sourceSheetShow.value = false;
+  switchError.value = '';
+});
+onDeactivated(() => {
+  sourceSheetShow.value = false;
+  switchError.value = '';
+});
 
 const inLibrary = computed(() => checkData.value?.inLibrary ?? false);
 
@@ -223,6 +240,39 @@ async function removeComic() {
   }
 }
 
+function openSourceSheet() {
+  switchError.value = '';
+  sourceSheetShow.value = true;
+}
+
+async function onSourceSelect(targetSource: string) {
+  const comic = displayComic.value;
+  if (!comic || switchingSource.value || targetSource === source.value) {
+    sourceSheetShow.value = false;
+    return;
+  }
+
+  switchingSource.value = targetSource;
+  switchError.value = '';
+
+  try {
+    const result = await switchComicSource({
+      comic,
+      targetSource,
+      history: history.value,
+      inLibrary: inLibrary.value,
+    });
+
+    sourceSheetShow.value = false;
+    queryClient.setQueryData([getComic.name, result.comic.source, result.comic.id], result.comic);
+    await router.replace(`/comic/${result.comic.source}/${result.comic.id}`);
+  } catch (error) {
+    switchError.value = getErrorMessage(error);
+  } finally {
+    switchingSource.value = '';
+  }
+}
+
 watch(
   displayComic,
   () => {
@@ -269,6 +319,11 @@ watch(
         <Button @click="toRead">
           <template v-if="history"> 继续阅读 [{{ history.chapterName }}] </template>
           <template v-else> 开始阅读 </template>
+        </Button>
+
+        <Button variant="outline" @click="openSourceSheet">
+          <ArrowLeftRight />
+          换源：{{ sourceName(source) }}
         </Button>
 
         <template v-if="!selecting">
@@ -377,4 +432,13 @@ watch(
       </div>
     </div>
   </div>
+
+  <SourceSheet
+    v-model="sourceSheetShow"
+    :sources="sources"
+    :current-source="source"
+    :loading-source="switchingSource"
+    :error="switchError"
+    @select="onSourceSelect"
+  />
 </template>

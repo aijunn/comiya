@@ -2,20 +2,26 @@
 import { getChapter, upsertHistory } from '@/api';
 import ChapterGestureMask from '@/components/ChapterGestureMask.vue';
 import LazyImage from '@/components/LazyImage.vue';
+import SourceSheet from '@/components/SourceSheet.vue';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Slider } from '@/components/ui/slider';
+import { useSources } from '@/composables/useSources';
 import { useActivated } from '@/hooks/activated';
 import { usePreviousRoute } from '@/hooks/previous-route';
 import { getChapterForReader } from '@/services/download';
+import { switchReaderSource } from '@/services/sourceSwitch';
 import { LocalStorageKey, ReadDirection } from '@/types/const';
+import { getErrorMessage } from '@/utils/error';
 import { resetThemeColor, setThemeColor } from '@/utils/theme-color';
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import { onKeyStroke, useDebounceFn, useEventListener, useLocalStorage, useMediaQuery } from '@vueuse/core';
 import {
+  ArrowLeftRight,
   ArrowLeftToLine,
   ArrowRightToLine,
   BookOpenText,
   ChevronLeft,
+  ChevronRight,
   LoaderCircle,
   Pointer,
   Settings,
@@ -44,19 +50,27 @@ onActivated(() => {
 
 onDeactivated(() => {
   resetThemeColor();
+  sourceSheetShow.value = false;
+  switchError.value = '';
 });
 
 const activated = useActivated();
 
 const route = useRoute('/comic/[source]/[comicId]/[chapterId]');
 const router = useRouter();
-
-const { previousRoute } = usePreviousRoute();
-const fromComic = computed(() => previousRoute.value?.name === '/comic/[source]/[comicId]/');
+const queryClient = useQueryClient();
+const { sources, sourceName } = useSources();
 
 const source = computed(() => route.params.source);
 const comicId = computed(() => route.params.comicId);
 const chapterId = computed(() => route.params.chapterId);
+
+const sourceSheetShow = ref(false);
+const switchingSource = ref('');
+const switchError = ref('');
+
+const { previousRoute } = usePreviousRoute();
+const fromComic = computed(() => previousRoute.value?.name === '/comic/[source]/[comicId]/');
 
 const { data, isFetching } = useQuery({
   queryKey: [getChapter.name, source, comicId, chapterId],
@@ -120,6 +134,8 @@ function onSlideEnd(index: number[]) {
 const controlMaskShow = ref(false);
 onActivated(() => {
   controlMaskShow.value = false;
+  sourceSheetShow.value = false;
+  switchError.value = '';
 });
 
 const readDirection = useLocalStorage(LocalStorageKey.ReadDirection, ReadDirection.TopToBottom);
@@ -162,6 +178,9 @@ function scrollToPage(index: number) {
 }
 
 function toNextPage() {
+  if (sourceSheetShow.value || switchingSource.value) {
+    return;
+  }
   const currentPage = activeIndex.value[0];
   if (currentPage === images.value.length - 1) {
     if (!showNextTip.value) {
@@ -177,6 +196,9 @@ function toNextPage() {
 }
 
 function toPrevPage() {
+  if (sourceSheetShow.value || switchingSource.value) {
+    return;
+  }
   const currentPage = activeIndex.value[0];
   if (currentPage === 0) {
     if (!showPrevTip.value) {
@@ -214,7 +236,6 @@ onKeyStroke(['ArrowUp', 'ArrowLeft'], (e) => {
 });
 
 // pre cache next chapter
-const queryClient = useQueryClient();
 const toEndDistance = computed(() => {
   if (!data.value || isFetching.value || !hasNext.value) {
     return Infinity;
@@ -243,6 +264,49 @@ watch(toEndDistance, () => {
   }
 });
 
+function openSourceSheet() {
+  switchError.value = '';
+  sourceSheetShow.value = true;
+}
+
+async function onSourceSelect(targetSource: string) {
+  if (!data.value || switchingSource.value || targetSource === source.value) {
+    sourceSheetShow.value = false;
+    return;
+  }
+
+  switchingSource.value = targetSource;
+  switchError.value = '';
+
+  try {
+    const result = await switchReaderSource({
+      source: source.value,
+      comicId: comicId.value,
+      chapterId: chapterId.value,
+      chapterName: data.value.name,
+      comicName: data.value.comicName,
+      page: activeIndex.value[0] + 1,
+      totalPages: images.value.length,
+      targetSource,
+    });
+
+    queryClient.setQueryData(
+      [getChapter.name, result.comic.source, result.comic.id, result.chapter.id],
+      result.chapterData,
+    );
+
+    sourceSheetShow.value = false;
+    controlMaskShow.value = false;
+    pageNavShow.value = false;
+
+    await router.replace(`/comic/${result.comic.source}/${result.comic.id}/${result.chapter.id}?page=${result.page}`);
+  } catch (error) {
+    switchError.value = getErrorMessage(error);
+  } finally {
+    switchingSource.value = '';
+  }
+}
+
 // update watch history
 const historyDirty = ref(false);
 const checkTimer = ref(0);
@@ -253,6 +317,9 @@ watch([source, comicId, chapterId, activeIndex], () => {
   historyDirty.value = true;
 });
 function update() {
+  if (switchingSource.value) {
+    return;
+  }
   if (historyDirty.value && data.value && comicId.value && chapterId.value && activated.value) {
     upsertHistory({
       source: source.value,
@@ -410,6 +477,21 @@ useEventListener(window, 'beforeunload', update);
                     {{ option.title }}
                   </div>
                 </div>
+
+                <div class="mx-4 flex items-center justify-between border-t border-white/15 pb-4 pt-3 text-sm">
+                  <div class="flex items-center gap-2 opacity-80">
+                    <ArrowLeftRight :size="18" />
+                    换源
+                  </div>
+                  <button
+                    type="button"
+                    class="flex max-w-[60%] items-center gap-1 rounded border border-white/20 px-2 py-1"
+                    @click="openSourceSheet"
+                  >
+                    <span class="truncate">{{ sourceName(source) }}</span>
+                    <ChevronRight :size="16" class="shrink-0" />
+                  </button>
+                </div>
               </CollapsibleContent>
             </div>
           </Collapsible>
@@ -456,6 +538,16 @@ useEventListener(window, 'beforeunload', update);
       }}
     </div>
   </div>
+
+  <SourceSheet
+    v-model="sourceSheetShow"
+    :sources="sources"
+    :current-source="source"
+    :loading-source="switchingSource"
+    :error="switchError"
+    dark
+    @select="onSourceSelect"
+  />
 </template>
 
 <style scoped>
