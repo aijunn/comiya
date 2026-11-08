@@ -95,6 +95,17 @@ const partialChapterIds = computed(() => new Set(downloadStore.partialChaptersBy
 const selectableChapterIds = computed(() =>
   allChapters.value.filter((chapter) => !downloadedChapterIds.value.has(chapter.id)).map((chapter) => chapter.id),
 );
+// 后端返回的章节按旧→新排列，详情页默认倒序展示；这里按默认展示顺序（新→旧）计算。
+const latestFirstChapterIds = computed(() =>
+  chapterGroups.value.flatMap((group) => group.chapters.map((chapter) => chapter.id).reverse()),
+);
+const selectableCurrentToLatestIds = computed(() => {
+  const index = latestFirstChapterIds.value.indexOf(currentChapterId.value);
+  if (index === -1) {
+    return [];
+  }
+  return latestFirstChapterIds.value.slice(0, index + 1).filter((id) => !downloadedChapterIds.value.has(id));
+});
 const allSelected = computed(
   () =>
     selectableChapterIds.value.length > 0 &&
@@ -167,6 +178,10 @@ function toggleChapter(chapterId: string) {
 
 function toggleSelectAll() {
   selectedChapterIds.value = allSelected.value ? [] : [...selectableChapterIds.value];
+}
+
+function selectCurrentToLatest() {
+  selectedChapterIds.value = [...selectableCurrentToLatestIds.value];
 }
 
 function confirmDownload() {
@@ -342,6 +357,14 @@ watch(
           </Button>
           <Button variant="outline" :disabled="selectableChapterIds.length === 0" @click="toggleSelectAll">
             {{ allSelected ? '取消全选' : '全选' }}
+          </Button>
+          <Button
+            variant="outline"
+            :disabled="selectableCurrentToLatestIds.length === 0"
+            title="从当前阅读章节选中到最新章节"
+            @click="selectCurrentToLatest"
+          >
+            选到最新
           </Button>
           <Button variant="outline" @click="cancelSelectMode">取消</Button>
         </template>
